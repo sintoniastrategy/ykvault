@@ -13,16 +13,15 @@ SLOT="${YKVAULT_SLOT:-2}"
 # Files stored as <id>.ykv.slot<N>; legacy <id>.ykv treated as slot 2.
 
 # Returns path to existing secret file for given ID, or empty string.
-# Tries .ykv.slot<SLOT> first, then legacy .ykv (compat, slot 2).
+# Slot is read from the filename — SLOT var is irrelevant for reads.
 secret_file() {
     local id="$1"
-    local slotted="${SECRETS_DIR}/${id}.ykv.slot${SLOT}"
-    local legacy="${SECRETS_DIR}/${id}.ykv"
-    if [ -f "$slotted" ]; then
-        echo "$slotted"
-    elif [ -f "$legacy" ]; then
-        echo "$legacy"
-    fi
+    # Check any .ykv.slotN file for this ID
+    for f in "${SECRETS_DIR}/${id}.ykv.slot"[0-9]*; do
+        [ -f "$f" ] && echo "$f" && return
+    done
+    # Legacy .ykv (no slot suffix)
+    [ -f "${SECRETS_DIR}/${id}.ykv" ] && echo "${SECRETS_DIR}/${id}.ykv"
 }
 
 # Returns the slot number encoded in a file path.

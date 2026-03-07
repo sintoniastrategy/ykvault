@@ -24,10 +24,12 @@ ykman otp chalresp 2 --touch --generate
 
 ## Slot
 
-Default slot is `2`. Override:
+Slot is only relevant when **storing** a secret. For `get`/`rename` it is auto-detected from the filename.
+
 ```sh
-YKVAULT_SLOT=1 ykvault get mytoken   # env
-ykvault -slot 1 get mytoken          # flag
+YKVAULT_SLOT=1 ykvault set mytoken   # store using slot 1
+ykvault -slot 1 set mytoken          # same via flag
+ykvault get mytoken                  # slot auto-detected, no flag needed
 ```
 
 ## How it works

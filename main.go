@@ -30,13 +30,22 @@ func slottedPath(id string) string {
 }
 
 // findSecret returns (path, fileSlot) for the given ID.
-// Tries .ykv.slot<slot> first, then legacy .ykv (compat, slot "2").
+// Slot is read from the filename — the -slot flag is irrelevant for reads.
 func findSecret(id string) (path, fileSlot string) {
-	p := slottedPath(id)
-	if _, err := os.Stat(p); err == nil {
-		return p, slot
+	dir := secretsDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", ""
 	}
-	legacy := filepath.Join(secretsDir(), id+legacySuffix)
+	prefix := id + ".ykv.slot"
+	for _, e := range entries {
+		name := e.Name()
+		if s, ok := strings.CutPrefix(name, prefix); ok && s != "" {
+			return filepath.Join(dir, name), s
+		}
+	}
+	// Legacy .ykv (no slot suffix) — treat as slot 2
+	legacy := filepath.Join(dir, id+legacySuffix)
 	if _, err := os.Stat(legacy); err == nil {
 		return legacy, "2"
 	}
