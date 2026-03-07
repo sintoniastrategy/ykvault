@@ -5,16 +5,44 @@
 # ykman otp chalresp 2 --touch --generate # generate hw-based non-extractable secret in slot 2
 
 SECRETS_DIR="${HOME}/.ykvault"
-ENC_SUFF=".ykv"
 SLOT="${YKVAULT_SLOT:-2}"
 
 # Derive key ourselves — OpenSSL just does raw AES
 # Format: 16-byte IV + ciphertext (no "Salted__" magic, no KDF)
 # OpenSSL 3.x: -K/-iv bypass KDF entirely; no warnings, no salt header.
+# Files stored as <id>.ykv.slot<N>; legacy <id>.ykv treated as slot 2.
+
+# Returns path to existing secret file for given ID, or empty string.
+# Tries .ykv.slot<SLOT> first, then legacy .ykv (compat, slot 2).
+secret_file() {
+    local id="$1"
+    local slotted="${SECRETS_DIR}/${id}.ykv.slot${SLOT}"
+    local legacy="${SECRETS_DIR}/${id}.ykv"
+    if [ -f "$slotted" ]; then
+        echo "$slotted"
+    elif [ -f "$legacy" ]; then
+        echo "$legacy"
+    fi
+}
+
+# Returns the slot number encoded in a file path.
+# foo.ykv.slot2 -> 2; foo.ykv -> 2 (compat default)
+file_slot() {
+    local file="$1"
+    case "$file" in
+        *.ykv.slot*) echo "${file##*.slot}" ;;
+        *)           echo "2" ;;
+    esac
+}
+
+derive_key_iv() {
+    local hmac="$1"
+    KEY=$(printf '%s' "$hmac" | openssl dgst -sha256 -r | cut -c1-64)
+    IV=$(printf '%s' "${hmac}iv" | openssl dgst -sha256 -r | cut -c1-32)
+}
 
 set_secret() {
     local id="$1"
-    local value
 
     if [ -z "$id" ]; then
         echo "Usage: set <id> (value from stdin)" >&2
@@ -23,15 +51,13 @@ set_secret() {
 
     mkdir -p "$SECRETS_DIR"
 
-    # Check if file already exists
-    if [ -f "${SECRETS_DIR}/${id}${ENC_SUFF}" ]; then
+    if [ -n "$(secret_file "$id")" ]; then
         echo "Error: secret '$id' already exists" >&2
-        echo "Remove it first: rm '${SECRETS_DIR}/${id}${ENC_SUFF}'" >&2
         return 1
     fi
 
     echo "Enter your secret $id (finish with ctrl-d):" >&2
-    # Read value from stdin
+    local value
     value=$(cat)
 
     if [ -z "$value" ]; then
@@ -39,7 +65,7 @@ set_secret() {
         return 1
     fi
 
-    echo "Touch your YubiKey to set $id ..." >&2
+    echo "Touch your YubiKey to set $id (slot $SLOT) ..." >&2
     local hmac
     hmac=$(ykchalresp -H -${SLOT} "$id" 2>/dev/null)
 
@@ -48,17 +74,11 @@ set_secret() {
         return 1
     fi
 
-    # We derive key and IV from HMAC output (deterministic)
-    # HMAC = 40 hex chars = 20 bytes
-    # SHA256(HMAC) = 64 hex chars = 32 bytes for AES-256 key
-    # SHA256(HMAC + "iv") = take first 32 hex = 16 bytes for IV
-    local key iv
-    key=$(printf '%s' "$hmac" | openssl dgst -sha256 -r | cut -c1-64)
-    iv=$(printf '%s' "${hmac}iv" | openssl dgst -sha256 -r | cut -c1-32)
+    derive_key_iv "$hmac"
+    printf '%s' "$value" | openssl enc -aes-256-cbc -K "$KEY" -iv "$IV" -base64 \
+        > "${SECRETS_DIR}/${id}.ykv.slot${SLOT}"
 
-    printf '%s' "$value" | openssl enc -aes-256-cbc -K "$key" -iv "$iv" -base64 > "${SECRETS_DIR}/${id}${ENC_SUFF}"
-
-    echo "Stored: $id"
+    echo "Stored: $id (slot $SLOT)"
 }
 
 get_secret() {
@@ -69,25 +89,26 @@ get_secret() {
         return 1
     fi
 
-    if [ ! -f "${SECRETS_DIR}/${id}${ENC_SUFF}" ]; then
+    local file
+    file=$(secret_file "$id")
+    if [ -z "$file" ]; then
         echo "Secret not found: $id" >&2
         return 1
     fi
 
-    echo "Touch your YubiKey to get $id ..." >&2
+    local s
+    s=$(file_slot "$file")
+    echo "Touch your YubiKey to get $id (slot $s) ..." >&2
     local hmac
-    hmac=$(ykchalresp -H -${SLOT} "$id" 2>/dev/null)
+    hmac=$(ykchalresp -H -${s} "$id" 2>/dev/null)
 
     if [ -z "$hmac" ]; then
         echo "YubiKey challenge failed" >&2
         return 1
     fi
 
-    local key iv
-    key=$(printf '%s' "$hmac" | openssl dgst -sha256 -r | cut -c1-64)
-    iv=$(printf '%s' "${hmac}iv" | openssl dgst -sha256 -r | cut -c1-32)
-
-    openssl enc -aes-256-cbc -d -K "$key" -iv "$iv" -base64 < "${SECRETS_DIR}/${id}${ENC_SUFF}" 2>/dev/null
+    derive_key_iv "$hmac"
+    openssl enc -aes-256-cbc -d -K "$KEY" -iv "$IV" -base64 < "$file" 2>/dev/null
 }
 
 rename_secret() {
@@ -99,41 +120,41 @@ rename_secret() {
         return 1
     fi
 
-    if [ ! -f "${SECRETS_DIR}/${old_id}${ENC_SUFF}" ]; then
+    local old_file
+    old_file=$(secret_file "$old_id")
+    if [ -z "$old_file" ]; then
         echo "Secret not found: $old_id" >&2
         return 1
     fi
 
-    if [ -f "${SECRETS_DIR}/${new_id}${ENC_SUFF}" ]; then
+    if [ -n "$(secret_file "$new_id")" ]; then
         echo "Error: secret '$new_id' already exists" >&2
         return 1
     fi
 
-    # Step 1: decrypt with old ID (touch 1)
-    echo "Touch your YubiKey to decrypt $old_id ..." >&2
+    # Decrypt with slot encoded in old filename (touch 1)
+    local old_slot
+    old_slot=$(file_slot "$old_file")
+    echo "Touch your YubiKey to decrypt $old_id (slot $old_slot) ..." >&2
     local hmac_old
-    hmac_old=$(ykchalresp -H -${SLOT} "$old_id" 2>/dev/null)
+    hmac_old=$(ykchalresp -H -${old_slot} "$old_id" 2>/dev/null)
 
     if [ -z "$hmac_old" ]; then
         echo "YubiKey challenge failed" >&2
         return 1
     fi
 
-    local key_old iv_old
-    key_old=$(printf '%s' "$hmac_old" | openssl dgst -sha256 -r | cut -c1-64)
-    iv_old=$(printf '%s' "${hmac_old}iv" | openssl dgst -sha256 -r | cut -c1-32)
-
+    derive_key_iv "$hmac_old"
     local value
-    value=$(openssl enc -aes-256-cbc -d -K "$key_old" -iv "$iv_old" -base64 \
-        < "${SECRETS_DIR}/${old_id}${ENC_SUFF}" 2>/dev/null)
+    value=$(openssl enc -aes-256-cbc -d -K "$KEY" -iv "$IV" -base64 < "$old_file" 2>/dev/null)
 
     if [ $? -ne 0 ] || [ -z "$value" ]; then
         echo "Decryption failed" >&2
         return 1
     fi
 
-    # Step 2: re-encrypt with new ID (touch 2)
-    echo "Touch your YubiKey to encrypt as $new_id ..." >&2
+    # Re-encrypt with new ID under current slot (touch 2)
+    echo "Touch your YubiKey to encrypt as $new_id (slot $SLOT) ..." >&2
     local hmac_new
     hmac_new=$(ykchalresp -H -${SLOT} "$new_id" 2>/dev/null)
 
@@ -142,29 +163,31 @@ rename_secret() {
         return 1
     fi
 
-    local key_new iv_new
-    key_new=$(printf '%s' "$hmac_new" | openssl dgst -sha256 -r | cut -c1-64)
-    iv_new=$(printf '%s' "${hmac_new}iv" | openssl dgst -sha256 -r | cut -c1-32)
-
-    printf '%s' "$value" | openssl enc -aes-256-cbc -K "$key_new" -iv "$iv_new" -base64 \
-        > "${SECRETS_DIR}/${new_id}${ENC_SUFF}"
+    derive_key_iv "$hmac_new"
+    printf '%s' "$value" | openssl enc -aes-256-cbc -K "$KEY" -iv "$IV" -base64 \
+        > "${SECRETS_DIR}/${new_id}.ykv.slot${SLOT}"
 
     if [ $? -ne 0 ]; then
         echo "Encryption failed" >&2
-        rm -f "${SECRETS_DIR}/${new_id}${ENC_SUFF}"
+        rm -f "${SECRETS_DIR}/${new_id}.ykv.slot${SLOT}"
         return 1
     fi
 
-    rm "${SECRETS_DIR}/${old_id}${ENC_SUFF}"
-    echo "Renamed: $old_id -> $new_id"
+    rm "$old_file"
+    echo "Renamed: $old_id -> $new_id (slot $SLOT)"
 }
 
 list_secrets() {
-    if [ -d "$SECRETS_DIR" ]; then
-        for f in "$SECRETS_DIR"/*${ENC_SUFF}; do
-            [ -e "$f" ] && basename "$f" ${ENC_SUFF}
-        done
+    if [ ! -d "$SECRETS_DIR" ]; then
+        return 0
     fi
+    # Collect IDs from both .ykv.slotN and legacy .ykv files
+    for f in "$SECRETS_DIR"/*.ykv.slot[0-9]* "$SECRETS_DIR"/*.ykv; do
+        [ -e "$f" ] || continue
+        name=$(basename "$f")
+        # Strip .ykv and everything after (handles both formats)
+        echo "${name%%.ykv*}"
+    done | sort -u
 }
 
 case "$1" in

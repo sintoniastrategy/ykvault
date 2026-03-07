@@ -12,10 +12,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
-const encSuffix = ".ykv"
+const legacySuffix = ".ykv" // compat: old files without slot suffix
 
 var slot string
 
@@ -24,12 +25,26 @@ func secretsDir() string {
 	return filepath.Join(home, ".ykvault")
 }
 
-func secretPath(id string) string {
-	return filepath.Join(secretsDir(), id+encSuffix)
+func slottedPath(id string) string {
+	return filepath.Join(secretsDir(), id+".ykv.slot"+slot)
 }
 
-func yubiKeyHMAC(id string) (string, error) {
-	out, err := exec.Command("ykchalresp", "-H", "-"+slot, id).Output()
+// findSecret returns (path, fileSlot) for the given ID.
+// Tries .ykv.slot<slot> first, then legacy .ykv (compat, slot "2").
+func findSecret(id string) (path, fileSlot string) {
+	p := slottedPath(id)
+	if _, err := os.Stat(p); err == nil {
+		return p, slot
+	}
+	legacy := filepath.Join(secretsDir(), id+legacySuffix)
+	if _, err := os.Stat(legacy); err == nil {
+		return legacy, "2"
+	}
+	return "", ""
+}
+
+func yubiKeyHMAC(id, s string) (string, error) {
+	out, err := exec.Command("ykchalresp", "-H", "-"+s, id).Output()
 	if err != nil {
 		return "", fmt.Errorf("YubiKey challenge failed")
 	}
@@ -38,7 +53,7 @@ func yubiKeyHMAC(id string) (string, error) {
 
 // deriveKey matches the shell script:
 //
-//	key = SHA256(hmac)          — 32 bytes
+//	key = SHA256(hmac)           — 32 bytes
 //	iv  = SHA256(hmac+"iv")[:16] — 16 bytes
 func deriveKey(hmac string) (key, iv []byte) {
 	k := sha256.Sum256([]byte(hmac))
@@ -107,13 +122,30 @@ func base64Wrap(data []byte) []byte {
 	return buf.Bytes()
 }
 
+func readAndDecrypt(path, id, s string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("secret not found: %s", id)
+	}
+	hmac, err := yubiKeyHMAC(id, s)
+	if err != nil {
+		return nil, err
+	}
+	key, iv := deriveKey(hmac)
+	cleaned := strings.ReplaceAll(string(data), "\n", "")
+	ct, err := base64.StdEncoding.DecodeString(cleaned)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ciphertext: %w", err)
+	}
+	return decryptAES(ct, key, iv)
+}
+
 func setSecret(id string) error {
 	if id == "" {
 		return fmt.Errorf("usage: set <id>")
 	}
-	path := secretPath(id)
-	if _, err := os.Stat(path); err == nil {
-		return fmt.Errorf("secret %q already exists; remove it first: rm %q", id, path)
+	if path, _ := findSecret(id); path != "" {
+		return fmt.Errorf("secret %q already exists", id)
 	}
 
 	fmt.Fprintf(os.Stderr, "Enter your secret %s (finish with ctrl-d):\n", id)
@@ -122,8 +154,8 @@ func setSecret(id string) error {
 		return fmt.Errorf("no value provided")
 	}
 
-	fmt.Fprintf(os.Stderr, "Touch your YubiKey to set %s ...\n", id)
-	hmac, err := yubiKeyHMAC(id)
+	fmt.Fprintf(os.Stderr, "Touch your YubiKey to set %s (slot %s) ...\n", id, slot)
+	hmac, err := yubiKeyHMAC(id, slot)
 	if err != nil {
 		return err
 	}
@@ -137,10 +169,11 @@ func setSecret(id string) error {
 	if err := os.MkdirAll(secretsDir(), 0700); err != nil {
 		return err
 	}
+	path := slottedPath(id)
 	if err := os.WriteFile(path, base64Wrap(ct), 0600); err != nil {
 		return err
 	}
-	fmt.Printf("Stored: %s\n", id)
+	fmt.Printf("Stored: %s (slot %s)\n", id, slot)
 	return nil
 }
 
@@ -148,25 +181,13 @@ func getSecret(id string) error {
 	if id == "" {
 		return fmt.Errorf("usage: get <id>")
 	}
-	data, err := os.ReadFile(secretPath(id))
-	if err != nil {
+	path, fileSlot := findSecret(id)
+	if path == "" {
 		return fmt.Errorf("secret not found: %s", id)
 	}
 
-	fmt.Fprintf(os.Stderr, "Touch your YubiKey to get %s ...\n", id)
-	hmac, err := yubiKeyHMAC(id)
-	if err != nil {
-		return err
-	}
-	key, iv := deriveKey(hmac)
-
-	cleaned := strings.ReplaceAll(string(data), "\n", "")
-	ct, err := base64.StdEncoding.DecodeString(cleaned)
-	if err != nil {
-		return fmt.Errorf("invalid ciphertext: %w", err)
-	}
-
-	pt, err := decryptAES(ct, key, iv)
+	fmt.Fprintf(os.Stderr, "Touch your YubiKey to get %s (slot %s) ...\n", id, fileSlot)
+	pt, err := readAndDecrypt(path, id, fileSlot)
 	if err != nil {
 		return fmt.Errorf("decryption failed (wrong key or corrupted data)")
 	}
@@ -178,53 +199,37 @@ func renameSecret(oldID, newID string) error {
 	if oldID == "" || newID == "" {
 		return fmt.Errorf("usage: rename <old_id> <new_id>")
 	}
-	oldPath := secretPath(oldID)
-	newPath := secretPath(newID)
 
-	if _, err := os.Stat(oldPath); os.IsNotExist(err) {
+	oldPath, oldSlot := findSecret(oldID)
+	if oldPath == "" {
 		return fmt.Errorf("secret not found: %s", oldID)
 	}
-	if _, err := os.Stat(newPath); err == nil {
+	if path, _ := findSecret(newID); path != "" {
 		return fmt.Errorf("secret %q already exists", newID)
 	}
 
-	// Decrypt with old ID (touch 1)
-	data, err := os.ReadFile(oldPath)
-	if err != nil {
-		return fmt.Errorf("secret not found: %s", oldID)
-	}
-
-	fmt.Fprintf(os.Stderr, "Touch your YubiKey to decrypt %s ...\n", oldID)
-	hmacOld, err := yubiKeyHMAC(oldID)
-	if err != nil {
-		return err
-	}
-	key, iv := deriveKey(hmacOld)
-
-	cleaned := strings.ReplaceAll(string(data), "\n", "")
-	ct, err := base64.StdEncoding.DecodeString(cleaned)
-	if err != nil {
-		return fmt.Errorf("invalid ciphertext: %w", err)
-	}
-	pt, err := decryptAES(ct, key, iv)
+	// Decrypt with slot encoded in old filename (touch 1)
+	fmt.Fprintf(os.Stderr, "Touch your YubiKey to decrypt %s (slot %s) ...\n", oldID, oldSlot)
+	pt, err := readAndDecrypt(oldPath, oldID, oldSlot)
 	if err != nil {
 		return fmt.Errorf("decryption failed (wrong key or corrupted data)")
 	}
 
-	// Re-encrypt with new ID (touch 2)
-	fmt.Fprintf(os.Stderr, "Touch your YubiKey to encrypt as %s ...\n", newID)
-	hmacNew, err := yubiKeyHMAC(newID)
+	// Re-encrypt with new ID under current slot (touch 2)
+	fmt.Fprintf(os.Stderr, "Touch your YubiKey to encrypt as %s (slot %s) ...\n", newID, slot)
+	hmacNew, err := yubiKeyHMAC(newID, slot)
 	if err != nil {
 		return err
 	}
 	keyNew, ivNew := deriveKey(hmacNew)
 
-	ct2, err := encryptAES(pt, keyNew, ivNew)
+	ct, err := encryptAES(pt, keyNew, ivNew)
 	if err != nil {
 		return err
 	}
 
-	if err := os.WriteFile(newPath, base64Wrap(ct2), 0600); err != nil {
+	newPath := slottedPath(newID)
+	if err := os.WriteFile(newPath, base64Wrap(ct), 0600); err != nil {
 		return err
 	}
 
@@ -233,7 +238,7 @@ func renameSecret(oldID, newID string) error {
 		return fmt.Errorf("failed to remove old secret: %w", err)
 	}
 
-	fmt.Printf("Renamed: %s -> %s\n", oldID, newID)
+	fmt.Printf("Renamed: %s -> %s (slot %s)\n", oldID, newID, slot)
 	return nil
 }
 
@@ -245,10 +250,26 @@ func listSecrets() error {
 	if err != nil {
 		return err
 	}
+	seen := make(map[string]bool)
 	for _, e := range entries {
-		if name := e.Name(); strings.HasSuffix(name, encSuffix) {
-			fmt.Println(strings.TrimSuffix(name, encSuffix))
+		name := e.Name()
+		var id string
+		if i := strings.Index(name, ".ykv"); i != -1 {
+			id = name[:i]
+		} else {
+			continue
 		}
+		if !seen[id] {
+			seen[id] = true
+		}
+	}
+	ids := make([]string, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		fmt.Println(id)
 	}
 	return nil
 }
