@@ -24,14 +24,14 @@ _ykvault() {
         get | rm)
             if [[ $num_after -eq 1 ]]; then
                 local ids
-                ids=$(ykvault list 2>/dev/null)
+                ids=$(ykvault ls 2>/dev/null)
                 COMPREPLY=($(compgen -W "$ids" -- "$cur"))
             fi
             ;;
         mv)
             if [[ $num_after -eq 1 ]]; then
                 local ids
-                ids=$(ykvault list 2>/dev/null)
+                ids=$(ykvault ls 2>/dev/null)
                 COMPREPLY=($(compgen -W "$ids" -- "$cur"))
             fi
             ;;
