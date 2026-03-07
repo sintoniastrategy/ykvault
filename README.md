@@ -1,0 +1,39 @@
+# ykvault
+
+Encrypted secrets vault backed by YubiKey. Secrets can't be decrypted without physical key presence.
+
+```sh
+echo "my_api_key" | ykvault set mytoken   # store (touch YubiKey)
+ykvault get mytoken                        # retrieve (touch YubiKey)
+ykvault rename mytoken mytoken_v2          # re-encrypt under new ID (2 touches)
+ykvault list                               # show all secret IDs
+```
+
+## Install
+
+```sh
+go install github.com/sintoniastrategy/ykvault@latest
+```
+
+Or download a binary from [releases](https://github.com/sintoniastrategy/ykvault/releases).
+
+**Requires:** `ykchalresp` in PATH and YubiKey slot 2 configured:
+```sh
+ykman otp chalresp 2 --touch --generate
+```
+
+## Slot
+
+Default slot is `2`. Override:
+```sh
+YKVAULT_SLOT=1 ykvault get mytoken   # env
+ykvault -slot 1 get mytoken          # flag
+```
+
+## How it works
+
+AES-256-CBC. Key and IV derived from YubiKey HMAC-SHA1 response to the secret ID as challenge — deterministic, non-extractable. Files stored in `~/.ykvault/<id>.ykv.slot<N>`.
+
+## Bash version
+
+`ykvault.sh` has identical crypto and file format but depends on `openssl enc`, whose behaviour varies across versions and distros. Use the Go binary for reliable cross-platform operation.
