@@ -4,7 +4,7 @@
 # Prerequisites:
 # ykman otp chalresp 2 --touch --generate # generate hw-based non-extractable secret in slot 2
 
-SECRETS_DIR="${HOME}/.ykvault"
+SECRETS_DIR="${YKVAULT_DIR:-${HOME}/.ykvault}"
 SLOT="${YKVAULT_SLOT:-2}"
 
 # Derive key ourselves — OpenSSL just does raw AES
@@ -199,6 +199,7 @@ case "$1" in
         echo "  set: reads value from stdin" >&2
         echo "       echo 'secret' | $(basename $0) set myid" >&2
         echo "  env: YKVAULT_SLOT=1 to override slot (default: 2)" >&2
+        echo "  env: YKVAULT_DIR=/path to override secrets dir (default: ~/.ykvault)" >&2
         exit 1
         ;;
 esac

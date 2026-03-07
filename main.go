@@ -21,6 +21,9 @@ const legacySuffix = ".ykv" // compat: old files without slot suffix
 var slot string
 
 func secretsDir() string {
+	if d := os.Getenv("YKVAULT_DIR"); d != "" {
+		return d
+	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".ykvault")
 }
@@ -288,7 +291,8 @@ func usage() {
 	fmt.Fprintf(os.Stderr, "Usage: %s [-slot N] {set <id> | get <id> | rename <old_id> <new_id> | list}\n", name)
 	fmt.Fprintf(os.Stderr, "  set: reads value from stdin\n")
 	fmt.Fprintf(os.Stderr, "       echo 'mysecret' | %s set myid\n", name)
-	fmt.Fprintf(os.Stderr, "  env: YKVAULT_SLOT=1 to set default slot\n")
+	fmt.Fprintf(os.Stderr, "  env: YKVAULT_SLOT=1 to override slot (default: 2)\n")
+	fmt.Fprintf(os.Stderr, "  env: YKVAULT_DIR=/path to override secrets dir (default: ~/.ykvault)\n")
 }
 
 func arg(args []string, i int) string {

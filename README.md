@@ -27,9 +27,14 @@ ykman otp chalresp 2 --touch --generate
 Slot is only relevant when **storing** a secret. For `get`/`rename` it is auto-detected from the filename.
 
 ```sh
-YKVAULT_SLOT=1 ykvault set mytoken   # store using slot 1
-ykvault -slot 1 set mytoken          # same via flag
-ykvault get mytoken                  # slot auto-detected, no flag needed
+YKVAULT_SLOT=1 ykvault set mytoken    # store using slot 1
+ykvault -slot 1 set mytoken           # same via flag
+ykvault get mytoken                   # slot auto-detected, no flag needed
+```
+
+Override secrets directory:
+```sh
+YKVAULT_DIR=/mnt/usb/secrets ykvault list
 ```
 
 ## How it works
