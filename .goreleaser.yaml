@@ -22,6 +22,8 @@ archives:
       - goos: windows
         formats:
           - zip
+    files:
+      - completions/*
 
 checksum:
   name_template: "checksums.txt"

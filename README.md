@@ -5,8 +5,9 @@ Encrypted secrets vault backed by YubiKey. Secrets can't be decrypted without ph
 ```sh
 echo "my_api_key" | ykvault set mytoken   # store (touch YubiKey)
 ykvault get mytoken                        # retrieve (touch YubiKey)
-ykvault rename mytoken mytoken_v2          # re-encrypt under new ID (2 touches)
-ykvault list                               # show all secret IDs
+ykvault mv mytoken mytoken_v2             # re-encrypt under new ID (2 touches)
+ykvault rm mytoken_v2                     # delete a secret
+ykvault ls                                 # show all secret IDs
 ```
 
 ## Install
@@ -40,6 +41,16 @@ YKVAULT_DIR=/mnt/usb/secrets ykvault list
 ## How it works
 
 AES-256-CBC. Key and IV derived from YubiKey HMAC-SHA1 response to the secret ID as challenge — deterministic, non-extractable. Files stored in `~/.ykvault/<id>.ykv.slot<N>`.
+
+## Bash completions
+
+```sh
+# From a release tarball:
+source completions/ykvault.bash
+
+# Or permanently:
+cp completions/ykvault.bash /etc/bash_completion.d/ykvault
+```
 
 ## Bash version
 

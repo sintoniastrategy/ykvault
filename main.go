@@ -207,9 +207,24 @@ func getSecret(id string) error {
 	return nil
 }
 
-func renameSecret(oldID, newID string) error {
+func rmSecret(id string) error {
+	if id == "" {
+		return fmt.Errorf("usage: rm <id>")
+	}
+	path, _ := findSecret(id)
+	if path == "" {
+		return fmt.Errorf("secret not found: %s", id)
+	}
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("failed to remove secret: %w", err)
+	}
+	fmt.Printf("Removed: %s\n", id)
+	return nil
+}
+
+func mvSecret(oldID, newID string) error {
 	if oldID == "" || newID == "" {
-		return fmt.Errorf("usage: rename <old_id> <new_id>")
+		return fmt.Errorf("usage: mv <old_id> <new_id>")
 	}
 
 	oldPath, oldSlot := findSecret(oldID)
@@ -250,7 +265,7 @@ func renameSecret(oldID, newID string) error {
 		return fmt.Errorf("failed to remove old secret: %w", err)
 	}
 
-	fmt.Printf("Renamed: %s -> %s (slot %s)\n", oldID, newID, slot)
+	fmt.Printf("Moved: %s -> %s (slot %s)\n", oldID, newID, slot)
 	return nil
 }
 
@@ -288,7 +303,7 @@ func listSecrets() error {
 
 func usage() {
 	name := filepath.Base(os.Args[0])
-	fmt.Fprintf(os.Stderr, "Usage: %s [-slot N] {set <id> | get <id> | rename <old_id> <new_id> | list}\n", name)
+	fmt.Fprintf(os.Stderr, "Usage: %s [-slot N] {set <id> | get <id> | mv <old_id> <new_id> | rm <id> | ls}\n", name)
 	fmt.Fprintf(os.Stderr, "  set: reads value from stdin\n")
 	fmt.Fprintf(os.Stderr, "       echo 'mysecret' | %s set myid\n", name)
 	fmt.Fprintf(os.Stderr, "  env: YKVAULT_SLOT=1 to override slot (default: 2)\n")
@@ -323,9 +338,11 @@ func main() {
 		err = setSecret(arg(args, 1))
 	case "get":
 		err = getSecret(arg(args, 1))
-	case "rename":
-		err = renameSecret(arg(args, 1), arg(args, 2))
-	case "list":
+	case "mv":
+		err = mvSecret(arg(args, 1), arg(args, 2))
+	case "rm":
+		err = rmSecret(arg(args, 1))
+	case "ls":
 		err = listSecrets()
 	default:
 		usage()
