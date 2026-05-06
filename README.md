@@ -35,7 +35,12 @@ ykvault get mytoken                   # slot auto-detected, no flag needed
 
 Override secrets directory:
 ```sh
-YKVAULT_DIR=/mnt/usb/secrets ykvault list
+YKVAULT_DIR=/mnt/usb/secrets ykvault ls
+```
+
+Preserve trailing newline on `set` input (default strips a single trailing `\r\n`/`\n`/`\r`):
+```sh
+echo "key-with-newline" | YKVAULT_PRESERVE_NEWLINE=1 ykvault set mykey
 ```
 
 ## How it works

@@ -13,12 +13,16 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
 const legacySuffix = ".ykv" // compat: old files without slot suffix
 
-var slot string
+var (
+	slot            string
+	preserveNewline bool
+)
 
 func secretsDir() string {
 	if d := os.Getenv("YKVAULT_DIR"); d != "" {
@@ -152,6 +156,22 @@ func readAndDecrypt(path, id, s string) ([]byte, error) {
 	return decryptAES(ct, key, iv)
 }
 
+// stripTrailingNewline removes at most one trailing newline sequence
+// (\r\n, \n, or \r) from b. Returns b unchanged if there is no trailing newline.
+func stripTrailingNewline(b []byte) []byte {
+	n := len(b)
+	if n == 0 {
+		return b
+	}
+	if n >= 2 && b[n-2] == '\r' && b[n-1] == '\n' {
+		return b[:n-2]
+	}
+	if b[n-1] == '\n' || b[n-1] == '\r' {
+		return b[:n-1]
+	}
+	return b
+}
+
 func setSecret(id string) error {
 	if id == "" {
 		return fmt.Errorf("usage: set <id>")
@@ -164,6 +184,9 @@ func setSecret(id string) error {
 	value, err := io.ReadAll(os.Stdin)
 	if err != nil || len(bytes.TrimSpace(value)) == 0 {
 		return fmt.Errorf("no value provided")
+	}
+	if !preserveNewline {
+		value = stripTrailingNewline(value)
 	}
 
 	fmt.Fprintf(os.Stderr, "Touch your YubiKey to set %s (slot %s) ...\n", id, slot)
@@ -325,6 +348,15 @@ func main() {
 	flag.StringVar(&slot, "slot", defaultSlot, "YubiKey slot (env: YKVAULT_SLOT)")
 	flag.Usage = usage
 	flag.Parse()
+
+	if env := os.Getenv("YKVAULT_PRESERVE_NEWLINE"); env != "" {
+		v, err := strconv.ParseBool(env)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: invalid YKVAULT_PRESERVE_NEWLINE: %q\n", env)
+			os.Exit(1)
+		}
+		preserveNewline = v
+	}
 
 	args := flag.Args()
 	if len(args) < 1 {
