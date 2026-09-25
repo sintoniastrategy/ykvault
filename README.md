@@ -126,7 +126,7 @@ Because that's what YubiKey OTP challenge-response slots compute. SHA-1 here is 
 Compatibility with the original `ykvault.sh` shell version, which relies on `openssl enc`. The Go binary is the recommended path; CBC vs GCM is not a meaningful difference at this scale (single-user, local file, integrity provided by the touch requirement and PKCS#7 padding validation).
 
 **Is this audited?**
-No. Read [`main.go`](main.go) — it's under 400 lines of standard-library Go.
+No. Read [`main.go`](main.go) — it uses only Go's standard library.
 
 ## Shell version
 
