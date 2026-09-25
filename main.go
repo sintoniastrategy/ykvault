@@ -21,6 +21,7 @@ const legacySuffix = ".ykv" // compat: old files without slot suffix
 
 var (
 	slot            string
+	slotExplicit    bool
 	preserveNewline bool
 )
 
@@ -172,12 +173,22 @@ func stripTrailingNewline(b []byte) []byte {
 	return b
 }
 
-func setSecret(id string) error {
+func setSecret(id string, force bool) error {
 	if id == "" {
-		return fmt.Errorf("usage: set <id>")
+		return fmt.Errorf("usage: set [--force] <id>")
 	}
-	if path, _ := findSecret(id); path != "" {
-		return fmt.Errorf("secret %q already exists", id)
+	path, fileSlot := findSecret(id)
+	setSlot := slot
+	if path != "" {
+		if !force {
+			return fmt.Errorf("secret %q already exists; use set --force to overwrite", id)
+		}
+		if slotExplicit && slot != fileSlot {
+			return fmt.Errorf("secret %q uses slot %s, but -slot %s was requested; omit -slot to overwrite using slot %s", id, fileSlot, slot, fileSlot)
+		}
+		setSlot = fileSlot
+	} else {
+		path = slottedPath(id)
 	}
 
 	fmt.Fprintf(os.Stderr, "Enter your secret %s (finish with ctrl-d):\n", id)
@@ -189,8 +200,8 @@ func setSecret(id string) error {
 		value = stripTrailingNewline(value)
 	}
 
-	fmt.Fprintf(os.Stderr, "Touch your YubiKey to set %s (slot %s) ...\n", id, slot)
-	hmac, err := yubiKeyHMAC(id, slot)
+	fmt.Fprintf(os.Stderr, "Touch your YubiKey to set %s (slot %s) ...\n", id, setSlot)
+	hmac, err := yubiKeyHMAC(id, setSlot)
 	if err != nil {
 		return err
 	}
@@ -204,11 +215,10 @@ func setSecret(id string) error {
 	if err := os.MkdirAll(secretsDir(), 0700); err != nil {
 		return err
 	}
-	path := slottedPath(id)
 	if err := os.WriteFile(path, base64Wrap(ct), 0600); err != nil {
 		return err
 	}
-	fmt.Printf("Stored: %s (slot %s)\n", id, slot)
+	fmt.Printf("Stored: %s (slot %s)\n", id, setSlot)
 	return nil
 }
 
@@ -326,9 +336,12 @@ func listSecrets() error {
 
 func usage() {
 	name := filepath.Base(os.Args[0])
-	fmt.Fprintf(os.Stderr, "Usage: %s [-slot N] {set <id> | get <id> | mv <old_id> <new_id> | rm <id> | ls}\n", name)
+	fmt.Fprintf(os.Stderr, "Usage: %s [-slot N] {set [--force] <id> | get <id> | mv <old_id> <new_id> | rm <id> | ls}\n", name)
 	fmt.Fprintf(os.Stderr, "  set: reads value from stdin\n")
 	fmt.Fprintf(os.Stderr, "       echo 'mysecret' | %s set myid\n", name)
+	fmt.Fprintf(os.Stderr, "       --force overwrites an existing file using its stored slot (legacy .ykv: slot 2)\n")
+	fmt.Fprintf(os.Stderr, "       an explicit -slot must match the stored slot; env/default are ignored for overwrites\n")
+	fmt.Fprintf(os.Stderr, "       new secrets use -slot, then YKVAULT_SLOT, then slot 2\n")
 	fmt.Fprintf(os.Stderr, "  env: YKVAULT_SLOT=1 to override slot (default: 2)\n")
 	fmt.Fprintf(os.Stderr, "  env: YKVAULT_DIR=/path to override secrets dir (default: ~/.ykvault)\n")
 }
@@ -348,6 +361,11 @@ func main() {
 	flag.StringVar(&slot, "slot", defaultSlot, "YubiKey slot (env: YKVAULT_SLOT)")
 	flag.Usage = usage
 	flag.Parse()
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "slot" {
+			slotExplicit = true
+		}
+	})
 
 	if env := os.Getenv("YKVAULT_PRESERVE_NEWLINE"); env != "" {
 		v, err := strconv.ParseBool(env)
@@ -367,7 +385,15 @@ func main() {
 	var err error
 	switch args[0] {
 	case "set":
-		err = setSecret(arg(args, 1))
+		setFlags := flag.NewFlagSet("set", flag.ExitOnError)
+		setFlags.Usage = usage
+		force := setFlags.Bool("force", false, "overwrite an existing secret using its stored slot")
+		setFlags.Parse(args[1:])
+		if setFlags.NArg() != 1 {
+			err = fmt.Errorf("usage: set [--force] <id>")
+		} else {
+			err = setSecret(setFlags.Arg(0), *force)
+		}
 	case "get":
 		err = getSecret(arg(args, 1))
 	case "mv":

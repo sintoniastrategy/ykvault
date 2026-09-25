@@ -41,13 +41,25 @@ ykman otp chalresp 2 --touch --generate
 
 ### Slot selection
 
-Slot only matters when **storing** a secret — `get` and `mv` auto-detect it from the filename.
+For a new secret, `-slot` overrides `YKVAULT_SLOT`, which overrides the default slot 2. `get` reads the slot from the filename. `mv` reads the old secret's slot from its filename and uses the selected slot for the new file.
 
 ```sh
 YKVAULT_SLOT=1 ykvault set mytoken    # store using slot 1
 ykvault -slot 1 set mytoken           # same via flag
 ykvault get mytoken                   # slot auto-detected
 ```
+
+To replace an existing value, use `set --force <id>`:
+
+```sh
+echo 'replacement' | ykvault set --force mytoken
+```
+
+Overwriting preserves the exact filename and uses its slot, ignoring `YKVAULT_SLOT` and the default slot. Legacy `.ykv` files are overwritten in place using slot 2. An explicit `-slot` must match the existing file's slot; a mismatch fails before reading stdin or requesting a YubiKey touch.
+
+For example, with an existing `mytoken.ykv.slot2`, `YKVAULT_SLOT=1 ykvault set --force mytoken` still uses slot 2. `YKVAULT_SLOT=2 ykvault -slot 1 set --force mytoken` fails because the explicit flag conflicts with the file.
+
+Without `--force`, existing secrets are rejected. If the secret does not exist, `--force` creates it using the normal slot precedence. `--force` does not change an existing secret's slot. Place `-slot` before `set` and `--force` before the ID.
 
 ### Custom secrets directory
 
